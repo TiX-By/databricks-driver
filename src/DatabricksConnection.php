@@ -66,15 +66,15 @@ class DatabricksConnection extends Connection
 
             $this->guardTruncation($result, $query);
 
-            $rows = $this->hydrator->hydrate($result->rows, $result->columns);
+            $chunks = [$this->hydrator->hydrate($result->rows, $result->columns)];
 
             for ($chunk = 1; $chunk < $result->chunkCount; $chunk++) {
                 $payload = $this->client->fetchChunk($result->statementId, $chunk);
 
-                $rows = array_merge($rows, $this->hydrator->hydrate($payload['data_array'] ?? [], $result->columns));
+                $chunks[] = $this->hydrator->hydrate($payload['data_array'] ?? [], $result->columns);
             }
 
-            return $rows;
+            return array_merge(...$chunks);
         });
     }
 
