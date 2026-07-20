@@ -290,8 +290,8 @@ DimEvent::where('status', 'active')->cursor()->each(function (DimEvent $event) {
 
 Databricks returns inline results up to 25 MiB; combined with `row_limit`, a query can come back **truncated**. The driver never lets that pass silently:
 
-- `strict_truncation => true` (default): throws `DatabricksResultTruncatedException`. Narrow the query, raise `row_limit`, or switch to `cursor()`-friendly slices.
-- `strict_truncation => false`: logs a warning and returns the partial result set.
+- `strict_truncation => true` (default): throws `DatabricksResultTruncatedException`. Narrow the query, raise `row_limit` (or set it to `0` for no cap), or switch to `cursor()`-friendly slices.
+- `strict_truncation => false`: logs a warning and returns the partial result set. Don't reach for this on data that has to reconcile exactly (e.g. against a financial source of truth) — it hides missing rows instead of surfacing them. Raise `row_limit` (see [Results larger than 25 MiB](#results-larger-than-25-mib) for pairing it with `disposition`) so nothing is silently dropped.
 
 ### Results larger than 25 MiB
 
@@ -308,6 +308,16 @@ If a query's result set exceeds the 25 MiB `INLINE` cap, Databricks rejects it o
 
 - Presigned links are short-lived (~15 minutes). A `select()` resolves every chunk immediately, so it's unaffected. A `cursor()` that's consumed slowly (e.g. paused on slow per-row work) can hit an expired link on a later chunk and throw `DatabricksQueryException`; prefer `select()` for `EXTERNAL_LINKS` results you can't consume quickly.
 - The external-link fetch never sends your Databricks token to the storage host — it's a plain unauthenticated request, forwarding only whatever `http_headers` the cloud provider requires.
+
+`EXTERNAL_LINKS` only lifts the 25 MiB *byte* cap — it does nothing about `row_limit`, a separate cap on *row count* (see below). A query with more rows than `row_limit` still comes back truncated even under `EXTERNAL_LINKS`. For a report that must reconcile exactly against a source of truth (no partial data acceptable), raise or disable both together:
+
+```php
+'databricks' => [
+    // ...
+    'disposition' => env('DATABRICKS_DISPOSITION', 'EXTERNAL_LINKS'),
+    'row_limit' => env('DATABRICKS_ROW_LIMIT', 0), // 0 = no server-side row cap
+],
+```
 
 ### Writes (opt-in)
 
