@@ -25,6 +25,8 @@ final class DatabricksClient
     /** @var list<int> seconds between polls; the last entry repeats */
     private const POLL_BACKOFF = [1, 2, 3, 5];
 
+    private const DISPOSITIONS = ['INLINE', 'EXTERNAL_LINKS'];
+
     public function __construct(
         private readonly string $host,
         private readonly string $token,
@@ -33,6 +35,7 @@ final class DatabricksClient
         private readonly ?string $schema,
         private readonly int $waitTimeout = 50,
         private readonly int $maxExecutionSeconds = 300,
+        private readonly string $disposition = 'INLINE',
     ) {
     }
 
@@ -44,6 +47,14 @@ final class DatabricksClient
             }
         }
 
+        $disposition = strtoupper((string) ($config['disposition'] ?? 'INLINE'));
+
+        if (! in_array($disposition, self::DISPOSITIONS, true)) {
+            throw new DatabricksException(
+                "The databricks connection 'disposition' config must be one of: " . implode(', ', self::DISPOSITIONS)
+            );
+        }
+
         return new self(
             host: rtrim((string) $config['host'], '/'),
             token: (string) $config['token'],
@@ -52,6 +63,7 @@ final class DatabricksClient
             schema: ($config['schema'] ?? null) !== null && $config['schema'] !== '' ? (string) $config['schema'] : null,
             waitTimeout: self::clampWaitTimeout((int) ($config['wait_timeout'] ?? 50)),
             maxExecutionSeconds: max(0, (int) ($config['max_execution_seconds'] ?? 300)),
+            disposition: $disposition,
         );
     }
 
@@ -70,7 +82,7 @@ final class DatabricksClient
             'parameters' => $parameters !== [] ? $parameters : null,
             'wait_timeout' => $this->waitTimeout . 's',
             'on_wait_timeout' => 'CONTINUE',
-            'disposition' => 'INLINE',
+            'disposition' => $this->disposition,
             'format' => 'JSON_ARRAY',
             'row_limit' => $rowLimit,
         ], static fn (mixed $value): bool => $value !== null);
@@ -108,7 +120,7 @@ final class DatabricksClient
             );
         }
 
-        return $response->json();
+        return $this->materializeChunk($response->json(), $statementId);
     }
 
     public function cancel(string $statementId): void
@@ -133,6 +145,11 @@ final class DatabricksClient
             $state = $response['status']['state'] ?? 'FAILED';
 
             if ($state === 'SUCCEEDED') {
+                $response['result'] = $this->materializeChunk(
+                    $response['result'] ?? [],
+                    (string) ($response['statement_id'] ?? ''),
+                );
+
                 return DatabricksResult::fromResponse($response);
             }
 
@@ -189,6 +206,74 @@ final class DatabricksClient
         }
 
         return $response->json();
+    }
+
+    /**
+     * With disposition=EXTERNAL_LINKS, chunk payloads carry a presigned
+     * storage URL under `external_links` instead of an inline `data_array`.
+     * Resolve it here so callers (settle/fetchChunk) always see `data_array`,
+     * regardless of disposition.
+     *
+     * @param array<string, mixed> $chunk
+     * @return array<string, mixed>
+     */
+    private function materializeChunk(array $chunk, string $statementId): array
+    {
+        if (isset($chunk['data_array'])) {
+            return $chunk;
+        }
+
+        $link = $chunk['external_links'][0] ?? null;
+
+        if ($link === null) {
+            $chunk['data_array'] = [];
+
+            return $chunk;
+        }
+
+        $chunk['data_array'] = $this->fetchExternalLink($link, $statementId);
+
+        return $chunk;
+    }
+
+    /**
+     * Fetches a chunk's rows from its presigned external link. This is a
+     * plain, unauthenticated request to cloud storage (S3/ADLS/GCS) — the
+     * Databricks bearer token must never be sent to that host.
+     *
+     * @param array{external_link?: string, http_headers?: array<string, string>} $link
+     * @return list<list<string|null>>
+     */
+    private function fetchExternalLink(array $link, string $statementId): array
+    {
+        $url = (string) ($link['external_link'] ?? '');
+
+        if ($url === '') {
+            return [];
+        }
+
+        try {
+            $response = Http::withHeaders($link['http_headers'] ?? [])
+                ->connectTimeout(10)
+                ->timeout($this->waitTimeout + 15)
+                ->get($url);
+        } catch (ConnectionException $exception) {
+            throw new DatabricksException(
+                'Could not reach the Databricks external result link: ' . $exception->getMessage(),
+                previous: $exception,
+            );
+        }
+
+        if ($response->failed()) {
+            throw new DatabricksQueryException(
+                'Failed to download Databricks external result link (HTTP ' . $response->status() . '). '
+                    . 'The presigned link may have expired — external links are short-lived, so a slow '
+                    . 'cursor() consumer can outlast one; prefer select() or resume within the link\'s window.',
+                statementId: $statementId,
+            );
+        }
+
+        return $response->json() ?? [];
     }
 
     private function get(string $path): Response

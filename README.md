@@ -18,7 +18,7 @@ $events = DB::connection('databricks')
 - **Parameterized queries** — Laravel's `?` bindings are converted to the API's typed named parameters (no string interpolation, safe against SQL injection).
 - **Typed results** — rows are hydrated into `stdClass` objects with proper PHP types based on the warehouse's column manifest (`INT` → `int`, `DOUBLE` → `float`, `BOOLEAN` → `bool`).
 - **Precision-safe money** — `DECIMAL` values are deliberately kept as strings so financial data never loses cents to float rounding.
-- **Large result sets** — multi-chunk results are fetched transparently; `cursor()` streams chunks lazily so memory stays flat.
+- **Large result sets** — multi-chunk results are fetched transparently; `cursor()` streams chunks lazily so memory stays flat. Results over the 25 MiB inline cap can use `EXTERNAL_LINKS` disposition instead.
 - **Read-only by default** — write statements are rejected *before any HTTP request leaves your machine* unless you explicitly opt in.
 - **Resilient polling** — long-running statements are polled with backoff; 429/5xx responses are tolerated; statements that exceed your deadline are canceled server-side.
 - **Honest failure modes** — unsupported operations (transactions, upserts, locks, schema builder) throw loud exceptions instead of silently doing the wrong thing.
@@ -102,6 +102,7 @@ Add a `databricks` connection to the `connections` array in `config/database.php
         'row_limit' => 100000,            // server-side cap on returned rows (0/null = no cap)
         'strict_truncation' => true,      // throw (true) or log a warning (false) when results are truncated
         'read_only' => true,              // reject INSERT/UPDATE/DELETE/DDL before any HTTP call
+        'disposition' => env('DATABRICKS_DISPOSITION', 'INLINE'), // or 'EXTERNAL_LINKS' for results >25 MiB
     ],
 ],
 ```
@@ -292,6 +293,22 @@ Databricks returns inline results up to 25 MiB; combined with `row_limit`, a que
 - `strict_truncation => true` (default): throws `DatabricksResultTruncatedException`. Narrow the query, raise `row_limit`, or switch to `cursor()`-friendly slices.
 - `strict_truncation => false`: logs a warning and returns the partial result set.
 
+### Results larger than 25 MiB
+
+If a query's result set exceeds the 25 MiB `INLINE` cap, Databricks rejects it outright with `Inline byte limit exceeded`. Set `'disposition' => 'EXTERNAL_LINKS'` on the connection to lift that cap — each chunk is fetched from a presigned storage URL instead of embedded in the API response:
+
+```php
+'databricks' => [
+    // ...
+    'disposition' => 'EXTERNAL_LINKS',
+],
+```
+
+`select()` and `cursor()` behave identically either way — chunk resolution happens transparently inside the client. Two things to know:
+
+- Presigned links are short-lived (~15 minutes). A `select()` resolves every chunk immediately, so it's unaffected. A `cursor()` that's consumed slowly (e.g. paused on slow per-row work) can hit an expired link on a later chunk and throw `DatabricksQueryException`; prefer `select()` for `EXTERNAL_LINKS` results you can't consume quickly.
+- The external-link fetch never sends your Databricks token to the storage host — it's a plain unauthenticated request, forwarding only whatever `http_headers` the cloud provider requires.
+
 ### Writes (opt-in)
 
 The connection is **read-only by default**. Write attempts fail fast — before any HTTP request is sent:
@@ -376,7 +393,6 @@ These operations throw a `RuntimeException` — deliberately, because Databricks
 
 Additional notes:
 
-- **`EXTERNAL_LINKS` disposition** (for very large results) is not yet supported — results are inline, capped at 25 MiB.
 - **OAuth M2M authentication** is not yet supported — use a personal access token.
 - Queries that legitimately return zero rows return `[]`, never an error.
 

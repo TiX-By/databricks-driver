@@ -53,6 +53,61 @@ final class DatabricksFixtures
     }
 
     /**
+     * A SUCCEEDED statement response for disposition=EXTERNAL_LINKS: the
+     * first chunk's rows live behind a presigned storage URL rather than
+     * inline in `result.data_array`.
+     *
+     * @param list<array{name: string, type_name: string}> $columns
+     */
+    public static function succeededExternalLink(
+        array $columns,
+        string $externalLink,
+        int $rowCount,
+        array $manifestOverrides = [],
+    ): array {
+        return [
+            'statement_id' => 'stmt-123',
+            'status' => ['state' => 'SUCCEEDED'],
+            'manifest' => array_merge([
+                'format' => 'JSON_ARRAY',
+                'schema' => ['column_count' => count($columns), 'columns' => $columns],
+                'total_chunk_count' => 1,
+                'total_row_count' => $rowCount,
+                'truncated' => false,
+            ], $manifestOverrides),
+            'result' => [
+                'external_links' => [
+                    [
+                        'chunk_index' => 0,
+                        'row_offset' => 0,
+                        'row_count' => $rowCount,
+                        'external_link' => $externalLink,
+                        'expiration' => '2026-01-01T00:15:00Z',
+                    ],
+                ],
+            ],
+        ];
+    }
+
+    /**
+     * A `/result/chunks/{n}` response for disposition=EXTERNAL_LINKS.
+     */
+    public static function chunkExternalLink(int $chunkIndex, string $externalLink, int $rowCount): array
+    {
+        return [
+            'external_links' => [
+                [
+                    'chunk_index' => $chunkIndex,
+                    'row_offset' => 0,
+                    'row_count' => $rowCount,
+                    'external_link' => $externalLink,
+                    'expiration' => '2026-01-01T00:15:00Z',
+                ],
+            ],
+        ];
+    }
+
+    /**
      * @return array<string, mixed>
      */
     public static function pending(string $statementId = 'stmt-123'): array
