@@ -53,7 +53,7 @@ class DatabricksConnection extends Connection
         return new DatabricksQueryGrammar($this);
     }
 
-    public function select($query, $bindings = [], $useReadPdo = true)
+    public function select($query, $bindings = [], $useReadPdo = true, array $fetchUsing = [])
     {
         $this->ensureReadQuery($query);
 
@@ -78,7 +78,7 @@ class DatabricksConnection extends Connection
         });
     }
 
-    public function cursor($query, $bindings = [], $useReadPdo = true)
+    public function cursor($query, $bindings = [], $useReadPdo = true, array $fetchUsing = [])
     {
         $this->ensureReadQuery($query);
 
@@ -105,7 +105,7 @@ class DatabricksConnection extends Connection
         }
     }
 
-    public function selectResultSets($query, $bindings = [], $useReadPdo = true)
+    public function selectResultSets($query, $bindings = [], $useReadPdo = true, array $fetchUsing = [])
     {
         throw new RuntimeException('Multi-statement queries are not supported by the databricks driver.');
     }

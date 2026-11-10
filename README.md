@@ -28,7 +28,7 @@ $events = DB::connection('databricks')
 | Requirement | Version |
 |---|---|
 | PHP | ^8.2 |
-| Laravel (illuminate/database) | ^11.0 \|\| ^12.0 |
+| Laravel (illuminate/database) | ^11.0 \|\| ^12.0 \|\| ^13.0 |
 | Databricks | Any workspace with a [SQL warehouse](https://docs.databricks.com/en/compute/sql-warehouse/index.html) |
 
 ## Installation
