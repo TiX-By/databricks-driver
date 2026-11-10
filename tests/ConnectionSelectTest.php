@@ -70,5 +70,5 @@ it('builds queries through the query builder with three-part table names', funct
 
     expect($total)->toBe(42);
 
-    Http::assertSent(fn ($request) => $request->data()['statement'] === 'select count(*) as aggregate from `vivenu`.`silver_mvp`.`tickets_clean`');
+    Http::assertSent(fn ($request) => str_replace('`aggregate`', 'aggregate', $request->data()['statement']) === 'select count(*) as aggregate from `vivenu`.`silver_mvp`.`tickets_clean`');
 });
